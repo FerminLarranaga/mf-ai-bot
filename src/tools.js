@@ -34,8 +34,8 @@ const TOOLS = [
                     type: "number",
                     description:
                         "Translation direction. " +
-                        "1 = from Spanish to a foreign language. " +
-                        "2 = from a foreign language to Spanish or from a foreign language to another foreign language.",
+                        "1 = from a foreign language to Spanish. " +
+                        "2 = from Spanish to a foreign language or from a foreign language to another foreign language.",
                 },
                 language: {
                     type: "number",
