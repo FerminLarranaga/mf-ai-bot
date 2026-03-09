@@ -1,121 +1,24 @@
 const { callResponsesAPI } = require("./openai");
 const { setCustomField, triggerSendFlow } = require("./manychat");
-const { processPdfFromUrl } = require("./pdfHandler");
-const { MAX_PDF_PAGES } = require("./config");
-
-// ── Local Tool Execution ──────────────────────────────────────
-
-function generateImageCode({ isPublic, typeOfDocument, direction, language }) {
-    if (isPublic) {
-        return `${typeOfDocument}_${direction}_${language}`;
-    }
-    return `${direction}_${language}`;
-}
-
-function executeFunction(name, args) {
-    switch (name) {
-        case "generate_image_code":
-            return generateImageCode(args);
-        default:
-            // Built-in OpenAI tools (e.g. file_search) are handled
-            // server-side by the API and never reach this branch.
-            throw new Error(`Unknown function: ${name}`);
-    }
-}
+const { buildApiInput } = require("./mediaParser");
+const { runToolLoop } = require("./toolExecutor");
 
 // ── Core Processing Pipeline ──────────────────────────────────
 
 async function processMessage(contactId, userMessage, previousResponseId) {
     try {
-        let apiInput = userMessage;
+        // 1. Resolve any media URLs (PDF / image) into API-compatible input
+        const apiInput = await buildApiInput(userMessage);
 
-        const urlRegex = /(https?:\/\/[^\s]+)/g;
-        const urls = userMessage.match(urlRegex);
+        // 2. Send to OpenAI Responses API
+        const initialResponse = await callResponsesAPI(apiInput, previousResponseId);
 
-        if (urls && urls.length > 0) {
-            const firstUrl = urls[0];
-            const lowerUrl = firstUrl.toLowerCase();
-            const urlWithoutParams = lowerUrl.split('?')[0];
+        // 3. Execute tool calls until the model returns a final answer
+        const { response, imageCode } = await runToolLoop(initialResponse);
 
-            if (urlWithoutParams.endsWith('.pdf')) {
-                console.log(`  📄  Found PDF URL: ${firstUrl}`);
-                try {
-                    const base64Images = await processPdfFromUrl(firstUrl, MAX_PDF_PAGES);
-                    console.log(`  📄  PDF converted to ${base64Images.length} images.`);
-
-                    const content = [];
-                    base64Images.forEach(b64 => {
-                        content.push({ type: "input_image", image_url: b64 });
-                    });
-                    apiInput = [{ role: "user", content }];
-                } catch (pdfErr) {
-                    console.error("PDF Processing Error:", pdfErr.message);
-                    apiInput = `${userMessage}\n\n[System Nota: Error procesando el PDF: ${pdfErr.message}]`;
-                }
-            } else if (
-                urlWithoutParams.endsWith('.jpg') ||
-                urlWithoutParams.endsWith('.jpeg') ||
-                urlWithoutParams.endsWith('.png') ||
-                urlWithoutParams.endsWith('.webp')
-            ) {
-                console.log(`  🖼️  Found Image URL: ${firstUrl}`);
-                apiInput = [
-                    {
-                        role: "user",
-                        content: [
-                            { type: "input_image", image_url: firstUrl }
-                        ]
-                    }
-                ];
-            }
-        }
-
-        // 1. Send user message to OpenAI Responses API
-        let response = await callResponsesAPI(apiInput, previousResponseId);
-
-        let imageCode = null;
-        let iterations = 0;
-        const MAX_TOOL_ROUNDS = 5; // safety limit
-
-        // 2. Handle tool calls in a loop
-        while (iterations++ < MAX_TOOL_ROUNDS) {
-            const functionCalls = response.output.filter(
-                (item) => item.type === "function_call"
-            );
-
-            if (functionCalls.length === 0) break;
-
-            // Execute every *custom* function call in this round.
-            // Built-in tools like file_search are resolved by OpenAI
-            // and appear in the output as type "file_search_call", not
-            // "function_call", so they never enter this map.
-            const functionOutputs = functionCalls.map((fc) => {
-                const args = JSON.parse(fc.arguments);
-                console.log(`  ⚙️  ${fc.name}(${JSON.stringify(args)})`);
-
-                const result = executeFunction(fc.name, args);
-                console.log(`  ➜  result: ${result}`);
-
-                if (fc.name === "generate_image_code") {
-                    imageCode = result;
-                }
-
-                return {
-                    type: "function_call_output",
-                    call_id: fc.call_id,
-                    output: String(result),
-                };
-            });
-
-            // Send results back; chain via previous_response_id
-            response = await callResponsesAPI(functionOutputs, response.id);
-        }
-
-        // 3. Extract assistant's final text
+        // 4. Extract assistant's final text
         const assistantText = response.output
-            .filter(
-                (item) => item.type === "message" && item.role === "assistant"
-            )
+            .filter((item) => item.type === "message" && item.role === "assistant")
             .flatMap((msg) => msg.content)
             .filter((block) => block.type === "output_text")
             .map((block) => block.text)
@@ -123,23 +26,19 @@ async function processMessage(contactId, userMessage, previousResponseId) {
 
         const subscriberId = Number(contactId);
 
-        // 4. Push AI response to ManyChat
-        await setCustomField(
-            subscriberId,
-            "AI_Response",
-            assistantText || "[empty response]"
-        );
+        // 5. Push AI response to ManyChat
+        await setCustomField(subscriberId, "AI_Response", assistantText || "[empty response]");
 
-        // 5. Set previous_response_id for the next iteration
+        // 6. Persist response ID for conversation threading
         await setCustomField(subscriberId, "OpenAI_Thread_ID", response.id);
 
-        // 6. If a code was generated, set the image_code field
+        // 7. If a code was generated, store it
         if (imageCode) {
             await setCustomField(subscriberId, "AI_Image_URL", imageCode);
             console.log(`  🏷️  AI_Image_URL set: ${imageCode}`);
         }
 
-        // 7. Trigger the ManyChat flow that sends AI_Response
+        // 8. Trigger the ManyChat flow that delivers AI_Response to the user
         await triggerSendFlow(subscriberId);
 
         console.log(`✅ contact ${contactId} | resp ${response.id}`);
@@ -148,6 +47,7 @@ async function processMessage(contactId, userMessage, previousResponseId) {
         console.error("❌ Error:", errData);
 
         // If the stored response ID is stale/invalid, retry fresh
+        // Do not uncomment or remove this
         // if (previousResponseId && error.response?.status === 400) {
         //     console.log("🔄 Retrying without previous_response_id …");
         //     return processMessage(contactId, userMessage, null);

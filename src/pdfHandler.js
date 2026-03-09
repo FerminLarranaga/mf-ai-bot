@@ -1,22 +1,28 @@
 const axios = require("axios");
-const pdfParse = require("pdf-parse");
-const pdfImgConvert = require("pdf-img-convert");
+const { PDFDocument } = require("pdf-lib");
 
-async function processPdfFromUrl(url, maxPages) {
-    // 1. Download buffer
-    const response = await axios.get(url, { responseType: 'arraybuffer' });
-    const buffer = Buffer.from(response.data);
+/**
+ * Downloads the PDF from the given URL and validates that its page count
+ * does not exceed `maxPages`.
+ *
+ * @param {string} url       Public URL of the PDF (e.g. a ManyChat file URL)
+ * @param {number} maxPages  Maximum number of pages allowed
+ * @returns {Promise<void>}  Resolves if OK, throws otherwise
+ */
+async function validatePdfPageCount(url, maxPages) {
+    const response = await axios.get(url, { responseType: "arraybuffer" });
+    const pdfDoc = await PDFDocument.load(response.data, {
+        ignoreEncryption: true,
+    });
+    const pageCount = pdfDoc.getPageCount();
 
-    // 2. Parse and count pages
-    const data = await pdfParse(buffer);
-    if (data.numpages > maxPages) {
-        throw new Error(`El PDF tiene demasiadas páginas (${data.numpages}). El máximo permitido es ${maxPages}.`);
+    if (pageCount > maxPages) {
+        throw new Error(
+            `El PDF tiene demasiadas páginas (${pageCount}). El máximo permitido es ${maxPages}.`
+        );
     }
 
-    // 3. Convert pages to base64 images
-    const pdfImages = await pdfImgConvert.convert(buffer, { base64: true });
-
-    return pdfImages.map(base64 => `data:image/png;base64,${base64}`);
+    console.log(`  📄  PDF validated: ${pageCount} page(s) (max ${maxPages}).`);
 }
 
-module.exports = { processPdfFromUrl };
+module.exports = { validatePdfPageCount };

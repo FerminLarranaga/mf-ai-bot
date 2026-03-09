@@ -10,6 +10,10 @@ const {
     VECTOR_STORE_ID,
     MAX_PDF_PAGES = 5,
     PORT = 3000,
+    AWS_REGION,
+    AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY,
+    AWS_BUCKET_NAME,
 } = process.env;
 
 const SYSTEM_INSTRUCTIONS = fs.readFileSync(
@@ -27,4 +31,8 @@ module.exports = {
     MAX_PDF_PAGES,
     PORT,
     SYSTEM_INSTRUCTIONS,
+    AWS_REGION,
+    AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY,
+    AWS_BUCKET_NAME,
 };
