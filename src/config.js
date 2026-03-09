@@ -8,6 +8,7 @@ const {
     MANYCHAT_FLOW_NS,
     MANYCHAT_API_BASE = "https://api.manychat.com/fb",
     VECTOR_STORE_ID,
+    MAX_PDF_PAGES = 5,
     PORT = 3000,
 } = process.env;
 
@@ -23,6 +24,7 @@ module.exports = {
     MANYCHAT_FLOW_NS,
     MANYCHAT_API_BASE,
     VECTOR_STORE_ID,
+    MAX_PDF_PAGES,
     PORT,
     SYSTEM_INSTRUCTIONS,
 };

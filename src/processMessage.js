@@ -1,5 +1,7 @@
 const { callResponsesAPI } = require("./openai");
 const { setCustomField, triggerSendFlow } = require("./manychat");
+const { processPdfFromUrl } = require("./pdfHandler");
+const { MAX_PDF_PAGES } = require("./config");
 
 // ── Local Tool Execution ──────────────────────────────────────
 
@@ -25,8 +27,51 @@ function executeFunction(name, args) {
 
 async function processMessage(contactId, userMessage, previousResponseId) {
     try {
+        let apiInput = userMessage;
+
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        const urls = userMessage.match(urlRegex);
+
+        if (urls && urls.length > 0) {
+            const firstUrl = urls[0];
+            const lowerUrl = firstUrl.toLowerCase();
+            const urlWithoutParams = lowerUrl.split('?')[0];
+
+            if (urlWithoutParams.endsWith('.pdf')) {
+                console.log(`  📄  Found PDF URL: ${firstUrl}`);
+                try {
+                    const base64Images = await processPdfFromUrl(firstUrl, MAX_PDF_PAGES);
+                    console.log(`  📄  PDF converted to ${base64Images.length} images.`);
+
+                    const content = [];
+                    base64Images.forEach(b64 => {
+                        content.push({ type: "input_image", image_url: b64 });
+                    });
+                    apiInput = [{ role: "user", content }];
+                } catch (pdfErr) {
+                    console.error("PDF Processing Error:", pdfErr.message);
+                    apiInput = `${userMessage}\n\n[System Nota: Error procesando el PDF: ${pdfErr.message}]`;
+                }
+            } else if (
+                urlWithoutParams.endsWith('.jpg') ||
+                urlWithoutParams.endsWith('.jpeg') ||
+                urlWithoutParams.endsWith('.png') ||
+                urlWithoutParams.endsWith('.webp')
+            ) {
+                console.log(`  🖼️  Found Image URL: ${firstUrl}`);
+                apiInput = [
+                    {
+                        role: "user",
+                        content: [
+                            { type: "input_image", image_url: firstUrl }
+                        ]
+                    }
+                ];
+            }
+        }
+
         // 1. Send user message to OpenAI Responses API
-        let response = await callResponsesAPI(userMessage, previousResponseId);
+        let response = await callResponsesAPI(apiInput, previousResponseId);
 
         let imageCode = null;
         let iterations = 0;
@@ -103,10 +148,10 @@ async function processMessage(contactId, userMessage, previousResponseId) {
         console.error("❌ Error:", errData);
 
         // If the stored response ID is stale/invalid, retry fresh
-        if (previousResponseId && error.response?.status === 400) {
-            console.log("🔄 Retrying without previous_response_id …");
-            return processMessage(contactId, userMessage, null);
-        }
+        // if (previousResponseId && error.response?.status === 400) {
+        //     console.log("🔄 Retrying without previous_response_id …");
+        //     return processMessage(contactId, userMessage, null);
+        // }
 
         // Best-effort: notify the customer something went wrong
         try {
